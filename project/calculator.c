@@ -19,7 +19,7 @@ MODULE_DESCRIPTION("A Calculator");
 
 void init_add_timer(void);
 void remove_timer(void);
-void hex_timer_function(unsigned long ptr);
+void calculator_timer_function(unsigned long ptr);
 
 #define base_lwFPGA 0xFF200000
 #define len_lwFPGA 0x200000
@@ -138,7 +138,7 @@ static dev_t dev_no;
 
 #define DEVICE_NAME "calculator"
 
-static int __init hex_init(void){
+static int __init calculator_init(void){
         //allocate char device
         if(alloc_chrdev_region(&dev_no, 0, 1, DEVICE_NAME) < 0){
                 printk(KERN_ERR "alloc_chrdev_region() error\n");
@@ -191,7 +191,7 @@ static int __init hex_init(void){
 
 }
 
-static void __exit hex_exit(void){
+static void __exit calculator_exit(void){
         iowrite32(0, hex0_addr);
         iowrite32(0, hex1_addr);
 	
@@ -203,26 +203,26 @@ static void __exit hex_exit(void){
         printk(" %s unregisterd.\n", DEVICE_NAME);
 }
 
-module_init(hex_init);
-module_exit(hex_exit);
+module_init(calculator_init);
+module_exit(calculator_exit);
 
 static int turnoff = 0;
-static struct timer_list hex_timer;
+static struct timer_list calculator_timer;
 
 void init_add_timer(void){
-        init_timer(&hex_timer);
-        hex_timer.function = hex_timer_function;
-        hex_timer.expires = jiffies + HZ;
-        hex_timer.data = 0;
+        init_timer(&calculator_timer);
+        calculator_timer.function = calculator_timer_function;
+        calculator_timer.expires = jiffies + HZ;
+        calculator_timer.data = 0;
 
-        add_timer(&hex_timer);
+        add_timer(&calculator_timer);
 }
 
 void remove_timer(void){
-        del_timer(&hex_timer);
+        del_timer(&calculator_timer);
 }
 
-void hex_timer_function(unsigned long ptr){
+void calculator_timer_function(unsigned long ptr){
         if ( !(mode & BLINK) ) return;
         turnoff = !turnoff;
         if(turnoff){
