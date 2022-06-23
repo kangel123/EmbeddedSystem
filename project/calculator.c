@@ -11,10 +11,11 @@
 #include <linux/cdev.h>
 #include <linux/device.h>
 
-MODULE_LICENSE("GPL");
-MODULE_AUTHOR("SangKyun Yun");
-MODULE_DESCRIPTION("Seven Segment LEDs");
+#include <linux/sched.h>
 
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("JinWoo Kim");
+MODULE_DESCRIPTION("A Calculator");
 
 void init_add_timer(void);
 void remove_timer(void);
@@ -29,9 +30,13 @@ void hex_timer_function(unsigned long ptr);
 #define add_SW  0x40
 #define addr_KEY        0x50
 
-static void *mem_base;
-static void *hex0_addr;   //hex3-hex0
-static void *hex1_addr;   //hex5-hex4
+#define offset_INTMASK 0x08
+#define offset_EDGE 0x0C
+
+static void* mem_base;
+static void* key_addr;
+static void* hex0_addr;   //hex3-hex0
+static void* hex1_addr;   //hex5-hex4
 static unsigned int data = -1;
 
 static unsigned int mode = 0;
@@ -45,90 +50,93 @@ int hex_conversion[16] = {
          0x7F, 0x67, 0x77, 0x7C, 0x39, 0x5E, 0x79, 0x71
 };
 
+static DECLARE_WAIT_QUEUE_HEAD(key_queue);
+static int flag = 0;
+unsigned int key_data;
+
 //write
-static ssize_t hex_write(struct file *file, const char __user *buf, size_t count, loff_t *f_pos){
-        unsigned int hex_data = 0;
-        unsigned int nofill = 0;
-
-        get_user(hex_data, (unsigned int *)buf);
-
-        hex_data = hex_data & 0xFFFFFF;
-        data = hex_data;
-
-        if(mode & NOFILL) nofill = 1;
-
-        hex1 = 0;
-        hex0 = hex_conversion[hex_data&0xF];
-
-        do{
-        hex_data >>= 4;
-        if(nofill && hex_data==0) break;
-        hex0 |= hex_conversion[hex_data&0xF]<<8;
-
-        hex_data >>=4;
-        if(nofill && hex_data==0) break;
-                hex0 |= hex_conversion[hex_data&0xF]<<16;
-
-        hex_data >>=4;
-        if(nofill && hex_data==0) break;
-        hex0 |= hex_conversion[hex_data&0xF]<<24;
-
-        hex_data >>=4;
-        if(nofill && hex_data==0) break;
-        hex1 |= hex_conversion[hex_data&0xF];
-
-        hex_data >>=4;
-        if(nofill && hex_data==0) break;
-        hex1 |= hex_conversion[hex_data&0xF]<<8;
-        }while(0);
-
-        iowrite32(hex0, hex0_addr);
-        iowrite32(hex1, hex1_addr);
-
-        return 4;
+static ssize_t calculator_write(struct file *file, const char __user *buf, size_t count, loff_t *f_pos){
+	unsigned int hex_data = 0;
+	unsigned int nofill = 0;
+	
+	get_user(hex_data, (unsigned int *)buf);
+	
+	hex_data =hex_data & 0xFFFFFF;
+	data = hex_data;
+	
+	if(mode & NOFILL) nofill = 1;
+	
+	hex1 = 0;
+	hex0 = hex_conversion[hex_data&0xF];
+	
+	do{
+	hex_data >>= 4;
+	if(nofill && hex_data==0) break;
+	hex0 |= hex_conversion[hex_data&0xF]<<8;
+	
+	hex_data >>= 4;
+	if(nofill && hex_data==0) break;
+	hex0 |= hex_conversion[hex_data&0xF]<<16;
+	
+	hex_data >>= 4;
+	if(nofill && hex_data==0) break;
+	hex0 |= hex_conversion[hex_data&0xF]<<24;
+	
+	hex_data >>= 4;
+	if(nofill && hex_data==0) break;
+	hex0 |= hex_conversion[hex_data&0xF];
+	
+	hex_data >>= 4;
+	if(nofill && hex_data==0) break;
+	hex1 |= hex_conversion[hex_data&0xF]<<8;
+	}while(0);
+	
+	iowrite32(hex0 ,hex0_addr);
+	iowrite32(hex1, hex1_addr);
+	
+	return 4;
 }
+
 
 //read
-static ssize_t hex_read(struct file *file, char __user *buf, size_t count, loff_t *f_pos){
-        put_user(data, (unsigned int*)buf);
-        return 4;
+static ssize_t calculator_read(struct file *file, char __user *buf, size_t count, loff_t *f_pos){
+	wait_event_interruptible(key_queue, flag !=0);
+	flag = 0;
+	put_user(key_data, buf);
+	return 4;
 }
 
-static int hex_open(struct inode *minode, struct file *mfile){
+irq_handler_t irq_handler(int irq, void *dev_id, struct pt_regs *regs){
+	key_data = ioread32(key_addr + offset_EDGE);
+	iowrite32(0xf, key_addr + offset_EDGE);
+
+	flag =1 ;
+	wake_up_interruptible(&key_queue);
+
+	return (irq_handler_t) IRQ_HANDLED;
+}
+
+static int calculator_open(struct inode *minode, struct file *mfile){
         return 0;
 }
 
-static int hex_release(struct inode *minode, struct file *mfile){
-//	if(mode & BLINK)
-//		remove_timer();
+static int calculator_release(struct inode *minode, struct file *mfile){
         return 0;
 }
 
-static long hex_ioctl(struct file *file, unsigned int cmd, unsigned long arg){
-        unsigned int newcmd;
 
-        newcmd = cmd;
-        if( (mode & BLINK) && !(newcmd & BLINK))
-                remove_timer();
-        else if( !(mode & BLINK) && (newcmd & BLINK))
-                init_add_timer();
-        mode=newcmd;
-        return 0;
-}
-
-static struct file_operations hex_fops = {
-        .read   =       hex_read,
-        .write  =       hex_write,
-        .open   =       hex_open,
-        .release        =       hex_release,
-        .unlocked_ioctl =       hex_ioctl,
+static struct file_operations calculator_fops = {
+        .read   =       calculator_read,
+        .write  =       calculator_write,
+        .open   =       calculator_open,
+        .release        =       calculator_release,
 };
 
-static struct cdev hex_cdev;
+static struct cdev calculator_cdev;
 static struct class *cl;
 static dev_t dev_no;
 
-#define DEVICE_NAME "hex"
+#define DEVICE_NAME "calculator"
 
 static int __init hex_init(void){
         //allocate char device
@@ -137,10 +145,10 @@ static int __init hex_init(void){
                 return -1;
         }
         //init cdev
-        cdev_init(&hex_cdev, &hex_fops);
+        cdev_init(&calculator_cdev, &calculator_fops);
 
         //add_cdev
-        if(cdev_add(&hex_cdev, dev_no, 1) < 0){
+        if(cdev_add(&calculator_cdev, dev_no, 1) < 0){
                 printk(KERN_ERR "cdev_add() error\n");
                 goto unreg_chrdev;
         }
@@ -161,12 +169,17 @@ static int __init hex_init(void){
                 printk(KERN_ERR "ioremap_nocache() error\n");
                 goto un_device;
         }
+      	hex0_addr = mem_base + addr_HEX0;
+       	hex1_addr = mem_base + addr_HEX1;
 
-        printk("Device : %s / Major : %d %x\n", DEVICE_NAME, MAJOR(dev_no), dev_no);
-        hex0_addr = mem_base + addr_HEX0;
-        hex1_addr = mem_base + addr_HEX1;
+	key_addr = mem_base + addr_KEY;
+	iowrite32(0xf, key_addr + offset_EDGE);
+	iowrite32(0xf, key_addr + offset_INTMASK);
 
-        return 0;
+ 	printk("Device : %s / Major : %d %x\n", DEVICE_NAME, MAJOR(dev_no), dev_no);
+	
+
+        return request_irq(73, (irq_handler_t)irq_handler, IRQF_SHARED, "key_irq_handler", (void *) (irq_handler));
 
         un_device:
                 device_destroy(cl, dev_no);
@@ -181,10 +194,8 @@ static int __init hex_init(void){
 static void __exit hex_exit(void){
         iowrite32(0, hex0_addr);
         iowrite32(0, hex1_addr);
-
-	if(mode & BLINK)
-		remove_timer();
-	mode = 0;
+	
+	free_irq(73, (void*) irq_handler);
         iounmap(mem_base);
         device_destroy(cl, dev_no);
         class_destroy(cl);
